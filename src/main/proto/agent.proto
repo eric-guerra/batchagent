@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package batchagent.v1;
+
+option java_multiple_files = true;
+option java_package = "com.ericguerra.batchagent.proto";
+
+// Runs on every store back-office server. The central scheduler (DagRunner) connects with a
+// client certificate and pushes jobs; output streams back over the same call.
+service Agent {
+  rpc RunJob (JobRequest) returns (stream JobEvent);
+  rpc CancelJob (CancelRequest) returns (CancelReply);
+  rpc ListJobs (ListJobsRequest) returns (ListJobsReply);
+}
+
+// The agent dials home on startup and every few seconds so the scheduler knows which stores are reachable.
+service Registry {
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
+}
+
+message JobRequest {
+  string job_id = 1;          // idempotency key: re-sending a known id re-attaches to that job
+  string command = 2;         // must match the agent's allow-list
+  repeated string args = 3;
+  map<string, string> env = 4;
+  int32 timeout_seconds = 5;
+}
+
+message JobEvent {
+  string job_id = 1;
+  oneof event {
+    Started started = 2;
+    OutputLine output = 3;
+    Finished finished = 4;
+  }
+}
+
+message Started { int64 pid = 1; int64 started_at_ms = 2; bool reattached = 3; }
+message OutputLine { int64 seq = 1; bool stderr = 2; string text = 3; }
+message Finished {
+  enum Status { SUCCEEDED = 0; FAILED = 1; TIMED_OUT = 2; CANCELLED = 3; REJECTED = 4; }
+  Status status = 1;
+  int32 exit_code = 2;
+  int64 duration_ms = 3;
+  string message = 4;
+}
+
+message CancelRequest { string job_id = 1; }
+message CancelReply { bool found = 1; }
+
+message ListJobsRequest {}
+message ListJobsReply { repeated JobSummary jobs = 1; }
+message JobSummary { string job_id = 1; string command = 2; string state = 3; int64 started_at_ms = 4; }
+
+message HeartbeatRequest {
+  string store_id = 1;
+  string agent_version = 2;
+  int32 running_jobs = 3;
+  double load_average = 4;
+  int64 free_disk_bytes = 5;
+}
+message HeartbeatReply { int32 next_interval_seconds = 1; bool drain = 2; }
